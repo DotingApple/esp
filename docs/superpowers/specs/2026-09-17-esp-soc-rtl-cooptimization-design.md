@@ -29,10 +29,12 @@ are not optimized and not scored.
 In scope:
 
 - one accelerator: `lstm_rtl`
+- repairing that accelerator's software/hardware buffer contract (§4.2), which
+  must precede everything else
 - a new `coopt_agent` package implementing the unified loop
 - a new standalone `goldengen` package implementing the correctness gate
 - rebuilding the baremetal harness for `lstm_rtl`
-- a fresh baseline measured on the current server
+- a fresh baseline measured on the current server, after the repair
 
 Out of scope for this phase:
 
@@ -53,7 +55,13 @@ Each decision below was settled with the project owner during brainstorming.
 | D4 | The golden is the baseline RTL's own output on a fixed fixture, guarded by a degeneracy check. | The goal is "must not regress from the trusted baseline", not absolute mathematical correctness. An independent reference model would require reverse-engineering fixed-point semantics from 1267 lines of Verilog — a separate sub-project. |
 | D5 | `goldengen` is a standalone package, not a module inside `coopt_agent`. | It must be usable on its own, and it is the seam where formal verification plugs in later as a second backend. |
 
-## 4. Why a correctness gate is mandatory
+## 4. The baseline cannot be trusted as restored
+
+Two independent problems, both found by reading the restored sources. Together
+they mean the first task of this project is repairing the baseline, not
+optimizing it.
+
+### 4.1 The correctness check is vacuous
 
 `accelerators/rtl/lstm_rtl/sw/baremetal/lstm.c` as shipped does this:
 
@@ -83,6 +91,48 @@ This is also the design's cautionary example: **a gate that always passes is wor
 than no gate**, because it makes everyone believe the work was validated. The
 degeneracy check in §10 exists specifically to prevent rebuilding that failure
 mode.
+
+### 4.2 The software and hardware disagree about the buffer
+
+Reading `hw/src/lstm_rtl_basic_dma64/lstm_rtl_basic_dma64.v` against `lstm.c`
+turns up three concrete defects:
+
+1. **The configuration registers are ignored.** `conf_info_in_dim`,
+   `conf_info_hidden_dim` and `conf_info_num_timesteps` appear only in the module
+   port list; the wrapper body never reads them. The accelerator's dimensions are
+   fixed by the `ARRAY_DEPTH 64` / `INPUT_DEPTH 100` defines in `lstm.v`, so the
+   `in_dim = 6000` the software writes has no effect on the hardware.
+2. **The output is written where the software does not look.** The wrapper sets
+   `dma_write_ctrl_data_index <= 32'd0`, writing the hidden state to the start of
+   the buffer, while `lstm.c` reads its results from `&mem[out_offset]` with
+   `out_offset = in_len` (about 6000 words in). The software therefore reads
+   leftover input, never the accelerator's output.
+3. **The input read overruns the allocation.** `TOTAL_BEATS` is
+   `BEATS_ALL + BEATS_X` = `42 * 64 + 25` = 2713 beats of 8 bytes = 21,704 bytes,
+   issued as one DMA read from index 0. `lstm.c` allocates
+   `mem_size = 6000 * 2 + 64 * 2` = 12,128 bytes. The accelerator reads roughly
+   9.5 KB past the buffer.
+
+A fourth observation bounds what "baseline" can mean here. The wrapper carries
+`dma_write_ctrl_data_length <= 32'd4096;` with the original `ARRAY_DEPTH` line
+commented out beside it and a `// 64 beats` comment that contradicts the value,
+plus `// << CHG` markers on two FSM transitions. These are not artifacts of the
+previous project: the backup repository's later commit only added the
+`dma_*_ctrl_data_user` ports and commented out a `SELECT_REG` write, so the edits
+arrived with the original SLDB import. **There is no pristine version to revert
+to.** The restored state is the baseline, and the spec records its provenance
+rather than pretending it is clean.
+
+Defect 2 alone makes a golden meaningless — it would capture leftover input. §15
+therefore gates the whole project on repairing the software/hardware contract
+before any golden is generated.
+
+Note also that the weights never move through DMA: `lstm_rest.v` loads all twelve
+`.mem` files into on-chip SPRAMs with `$readmemh` at lines 25, 70 and 119. The
+only DMA traffic is one 21,704-byte read and one write. This is why §9 can
+exclude the accelerator cache knob at no cost, and why the report's "reuse
+persistent local weight buffers across invocations" optimization target does not
+apply to this accelerator at all.
 
 ## 5. Architecture
 
@@ -228,11 +278,35 @@ knobs is future work.
 Validation is layered, because the existing validators are not sufficient on
 their own. `soc_opt_agent/config_edit/validators.py` checks allowlist membership,
 duplicate keys and mixed enabled/disabled states; **it performs no numeric
-legality checking**. `coopt_agent` therefore adds a legality table of its own
-giving, per scalar knob, the legal values or the legal range. ESP does not expose
-its own legality constraints in a queryable form, so this table is our own and
-must be treated as fallible: a value it admits can still make ESP generate cache
-RTL that fails to compile, which is one of the failure modes the report observed.
+legality checking**.
+
+`coopt_agent` adds that check, and **mirrors ESP's own constraints rather than
+inventing them**. ESP's configuration GUI enumerates the legal values, and those
+lists are the authority:
+
+| Knob | Legal values | Source |
+|---|---|---|
+| `CONFIG_QUEUE_SIZE` | 2 – 17 | `tools/socgen/NoCConfiguration.py:802` |
+| `CONFIG_COH_NOC_WIDTH` | 32, 64, 128, 256, 512, 1024 | `tools/socgen/NoCConfiguration.py:681` |
+| `CONFIG_DMA_NOC_WIDTH` | 32, 64, 128, 256, 512, 1024 | same |
+| `CONFIG_MEM_LINK_WIDTH` | 32, 64, 128, 256, 512 — **no 1024** | `tools/socgen/esp_creator.py:306` |
+| `CONFIG_SLM_KBYTES` | 64, 128, 256, 512, 1024, 2048, 4096 | `tools/socgen/esp_creator.py:224` |
+
+A unit test asserts that this table still matches those source lists, so upstream
+drift is caught rather than silently tolerated.
+
+Mirroring pays off immediately: the report records a proposal setting
+`CONFIG_QUEUE_SIZE` to 64, which is **above the legal maximum of 17**. Some of the
+old SoC loop's unexplained failures were very likely illegal values it had no way
+to recognize. The asymmetry between NoC width (up to 1024) and memory link width
+(up to 512) is the kind of detail a hand-written table gets wrong.
+
+Per-knob ranges are necessary but not sufficient: ESP also enforces cross-field
+constraints — `NoCConfiguration.py:924` and `:995` reject a configuration where
+more than one SLM tile is present and `CONFIG_SLM_KBYTES` is below 1024. A value
+this table admits can still make ESP generate cache RTL that does not compile,
+which is a failure mode the report observed. Treat a generation failure as
+evidence that the table is incomplete, and extend it.
 
 Order of checks on each derived value:
 
@@ -283,7 +357,7 @@ means adding an adapter and a fixture, not touching the engine.
 
 **Degeneracy check — runs at `generate` time. If it fails, goldengen refuses to
 write a golden and the campaign stops.** A golden that passes trivially is the
-failure mode of §4 rebuilt.
+failure mode of §4.1 rebuilt.
 
 1. an output block is present for every invocation
 2. each vector's length is exactly `hidden_dim * num_timesteps` (64 for the
@@ -293,10 +367,17 @@ failure mode of §4 rebuilt.
 5. all invocations produce identical vectors
 
 `check` compares elementwise against the golden and additionally re-asserts (5).
-Rule 5 is not ceremony: "reuse persistent local weight buffers across
-invocations" is one of the report's own RTL optimization targets, and a patch
-that reuses weights but resets them incorrectly produces a correct invocation 0
-and wrong invocations 1 and 2. A single-invocation golden cannot see that.
+
+Rule 5 is not ceremony, though its justification is narrower than the report's
+framing suggests. "Reuse persistent local weight buffers across invocations" is
+one of the report's RTL optimization targets, but it does not apply here: LSTM's
+weights are `$readmemh`-loaded into on-chip SPRAMs and never move through DMA
+(§4.2). What rule 5 does protect is the wrapper's own per-run state — `buf_u`,
+`buf_v` and `buf_b` are filled from DMA on every invocation, and the FSM's reset
+path is directly in the edit surface, since removing bubble states is an
+explicit optimization target. A patch that drops a reset or lets a buffer carry
+over produces a correct invocation 0 and wrong invocations 1 and 2, which a
+single-invocation golden cannot see.
 
 ## 11. Harness rebuild
 
@@ -390,26 +471,42 @@ hand-constructed degenerate variants.
 
 Unit tests passing is not sufficient. The phase is done when:
 
-1. all unit tests pass
-2. `make lstm_rtl-baremetal` compiles with the rebuilt harness on this server
-3. a ModelSim run completes and the transcript contains parseable monitor stats,
+1. **the software/hardware contract of §4.2 is repaired**, so that the software
+   reads the accelerator's output and the accelerator's DMA read stays inside the
+   allocation. Until this holds, nothing downstream means anything; this precedes
+   all agent code.
+2. all unit tests pass
+3. `make lstm_rtl-baremetal` compiles with the rebuilt harness on this server
+4. a ModelSim run completes and the transcript contains parseable monitor stats,
    cycle counts and three output blocks
-4. `goldengen generate` produces a golden that survives the degeneracy check —
+5. `goldengen generate` produces a golden that survives the degeneracy check —
    if the baseline output turns out to be degenerate, that is a finding to report,
    not something to work around
-5. a fresh `lstm_rtl` baseline is recorded on this server, with its own numbers
-6. at least one full co-optimization iteration runs end to end and its
+6. a fresh `lstm_rtl` baseline is recorded on this server, with its own numbers
+7. at least one full co-optimization iteration runs end to end and its
    accept/reject decision is backed by evidence on disk
 
-No claim that the loop works is made before (6).
+No claim that the loop works is made before (7).
+
+Item 1 changes the shape of the work: the repair touches the baseline the
+optimizer is measured against, so it must be finished, committed and measured
+before the first candidate is ever proposed. Whether the fix belongs in the
+software (read from index 0, allocate 21,704 bytes) or in the wrapper (write at
+`out_offset`, derive lengths from the configuration registers) is an
+implementation decision for the plan, but it must be made deliberately and
+recorded — changing the wrapper changes the thing being optimized.
 
 ## 16. Known risks and open questions
 
-- **`in_dim` mismatch.** The baremetal program passes `in_dim = 6000`, while
-  `lstm.v` declares `INPUT_DEPTH 100` and `INWEIGHT_DEPTH 6400 (100x64)`. Whether
-  6000 is 60 timesteps of 100, or a software/hardware mismatch, is unresolved. It
-  must be settled before the golden is trusted — a degenerate baseline output
-  would likely be the first symptom.
+- **A repaired baseline is not the reported baseline.** The `in_dim` question is
+  resolved in §4.2 — the configuration registers are dead and the buffer contract
+  is broken — but resolving it means the baseline we measure will not be the one
+  the report measured. The report's 2,049,922 end-to-end cycles are not a target
+  to reproduce, and the spec does not treat them as one.
+- **The repair could mask or create a bottleneck.** Fixing the DMA read length or
+  the write index changes exactly the traffic the optimizer is meant to improve.
+  The baseline must be re-measured after the repair, and the repair itself must
+  not be scored as an optimization.
 - **Toolchain drift.** The cross compiler here is GCC 8.3.0 built from
   riscv-gnu-toolchain `afcc8bc`. The old server's version is unknown, which is one
   more reason no old measurement is reused.
@@ -418,12 +515,13 @@ No claim that the loop works is made before (6).
 - **Clamped requirements.** When a requested knob value is clamped, the RTL change
   runs under a SoC that does not fully satisfy it. The clamp is recorded, but the
   loop still scores the result; the reflection prompt must be able to see this.
-- **The legality table is ours, not ESP's.** ESP exposes no queryable legality
-  constraints for `.esp_config`, so §9's table encodes our understanding. A value
-  it admits can still produce cache RTL that does not compile — the report saw
-  exactly this, including a negative replication multiplier in
-  `l2_localmem_asic.sv`. Treat generation failures as evidence that the table is
-  wrong, and correct it rather than routing around it.
+- **The legality table is mirrored, not complete.** §9's table is copied from
+  ESP's own GUI choice lists and tested against them, so per-knob ranges are
+  authoritative. Cross-field constraints are not covered, and a legal combination
+  can still produce cache RTL that does not compile — the report saw exactly this,
+  including a negative replication multiplier in `l2_localmem_asic.sv`. Treat
+  generation failures as evidence the table is incomplete, and extend it rather
+  than routing around it.
 
 ## 17. Future work
 
