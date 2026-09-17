@@ -1,0 +1,20 @@
+  -- LSTM_RTL
+  constant lstm_rtl_0_pindex : integer range 0 to NAPBSLV - 1 := 296;
+  constant lstm_rtl_0_pirq : integer range 0 to NAHBIRQ - 1 := 5;
+  constant lstm_rtl_0_irq_type : integer range 0 to 1 := 0;
+  constant lstm_rtl_0_paddr : integer range 0 to 4095 := 16#100#;
+  constant lstm_rtl_0_pmask : integer range 0 to 4095 := 16#FFE#;
+  constant lstm_rtl_0_paddr_ext : integer range 0 to 4095 := 16#000#;
+  constant lstm_rtl_0_pmask_ext : integer range 0 to 4095 := 16#000#;
+  constant lstm_rtl_0_pconfig : apb_config_type := (
+  0 => ahb_device_reg (VENDOR_SLD, SLD_LSTM_RTL, 0, 0, 5),
+    296 => lstm_rtl_0_pconfig,
+    2 => HLSCFG_LSTM_RTL_BASIC_DMA64,
+    2 => SLD_LSTM_RTL,
+    2 => lstm_rtl_0_pindex,
+    2 => lstm_rtl_0_paddr,
+    2 => lstm_rtl_0_paddr_ext,
+    2 => lstm_rtl_0_pmask,
+    2 => lstm_rtl_0_pmask_ext,
+    2 => lstm_rtl_0_pirq,
+    2 => lstm_rtl_0_irq_type,
