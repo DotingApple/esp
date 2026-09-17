@@ -7,3 +7,8 @@ __pycache__
 _leon3_build
 _riscv_build
 _riscv32imc_build
+
+# --- SoC+RTL co-optimization project ---
+riscv_build.log
+riscv_make.log
+.claude/
