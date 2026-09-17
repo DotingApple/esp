@@ -29,8 +29,8 @@ are not optimized and not scored.
 In scope:
 
 - one accelerator: `lstm_rtl`
-- repairing that accelerator's software/hardware buffer contract (§4.2), which
-  must precede everything else
+- repairing that accelerator's software/hardware buffer contract (§4.2)
+  software-side, which must precede everything else
 - a new `coopt_agent` package implementing the unified loop
 - a new standalone `goldengen` package implementing the correctness gate
 - rebuilding the baremetal harness for `lstm_rtl`
@@ -57,9 +57,11 @@ Each decision below was settled with the project owner during brainstorming.
 
 ## 4. The baseline cannot be trusted as restored
 
-Two independent problems, both found by reading the restored sources. Together
-they mean the first task of this project is repairing the baseline, not
-optimizing it.
+Reading the restored sources turns up two independent defects — §4.1 and §4.2 —
+which together mean the first task of this project is repairing the baseline, not
+optimizing it. §4.3 is not a defect but a measurement of where this
+accelerator's cost actually sits; it is recorded here because it decides what the
+optimizer should be aimed at and which SoC knobs matter.
 
 ### 4.1 The correctness check is vacuous
 
@@ -127,12 +129,34 @@ Defect 2 alone makes a golden meaningless — it would capture leftover input. �
 therefore gates the whole project on repairing the software/hardware contract
 before any golden is generated.
 
-Note also that the weights never move through DMA: `lstm_rest.v` loads all twelve
-`.mem` files into on-chip SPRAMs with `$readmemh` at lines 25, 70 and 119. The
-only DMA traffic is one 21,704-byte read and one write. This is why §9 can
-exclude the accelerator cache knob at no cost, and why the report's "reuse
-persistent local weight buffers across invocations" optimization target does not
-apply to this accelerator at all.
+### 4.3 Almost all DMA traffic is weights, re-read every invocation
+
+`lstm_rest.v` does contain `$readmemh` calls for the twelve `.mem` weight files,
+at lines 25, 70 and 119 — but all three sit inside `` `ifdef SIMULATION_MEMORY ``,
+and `lstm.v:5` has that define **commented out**. The active branch is the
+`` `else ``, which only sets a `(* ram_init_file *)` synthesis attribute; that
+attribute does nothing under ModelSim, where the RAMs start undefined.
+
+The weights therefore arrive over DMA. The `lstm` module takes them through
+ports — `wren_a_u`, `wren_a_w`, `wren_a_b` with `wdata_u`, `wdata_v`, `wdata_b` —
+and the wrapper fills `buf_u` (1024 bits), `buf_v` (1600 bits) and `buf_b` from
+the DMA read channel before driving those ports.
+
+That makes the beat budget lopsided:
+
+| | beats | bytes | share |
+|---|---|---|---|
+| weights and biases (64 rows x 42 beats) | 2688 | 21,504 | **99.1%** |
+| the actual input vector x | 25 | 200 | 0.9% |
+| `TOTAL_BEATS` | 2713 | 21,704 | |
+
+**21.5 KB of identical weights is re-read on every invocation**, 64.5 KB across
+the three. This is the accelerator's dominant traffic and its largest single
+optimization opportunity, and it is exactly the report's "reuse persistent local
+weight buffers across invocations" target. It is also the clearest case in this
+project of a change that needs both layers: the wrapper can hold weights locally
+and skip the reload, or the SoC can give the accelerator a cache large enough for
+invocations 1 and 2 to hit — which is why §9 admits the accelerator cache knob.
 
 ## 5. Architecture
 
@@ -262,18 +286,50 @@ reproducible and the minimum sufficient configuration can be recomputed at any
 time. A monotonic ratchet was rejected: it drifts one-way toward the maximum and
 cannot release a knob that a later RTL change no longer needs.
 
-**Requirements are restricted to scalar numeric knobs.** `.esp_config` values are
-opaque strings to `soc_opt_agent`'s parser (`ConfigEntry.value: str`), and
-`CONFIG_CPU_CACHES` / `CONFIG_ACC_CACHES` carry composite values — the report
-records a proposal setting `CONFIG_ACC_CACHES` to `1024 8`. A scalar `min_value`
-cannot express those. For this phase `soc_requirements` may therefore name only:
+**Requirements name a field path, not a config key.** `.esp_config` values are
+opaque strings to `soc_opt_agent`'s parser (`ConfigEntry.value: str`), and two
+keys carry several numbers, written by `tools/socgen/soc.py:376-386` as:
 
-`CONFIG_QUEUE_SIZE`, `CONFIG_COH_NOC_WIDTH`, `CONFIG_DMA_NOC_WIDTH`,
-`CONFIG_MEM_LINK_WIDTH`, `CONFIG_SLM_KBYTES`
+```
+CONFIG_CPU_CACHES = <l2_sets> <l2_ways> <llc_sets> <llc_ways>
+CONFIG_ACC_CACHES = <acc_l2_sets> <acc_l2_ways>
+```
 
-The two cache knobs stay in the allowlist — the baseline may already set them —
-but the LLM may not raise them. Extending the requirement shape to composite
-knobs is future work.
+A requirement therefore names a dotted path, so the per-path maximum merge above
+works unchanged for scalar and composite knobs alike:
+
+| Path | Legal values | Source |
+|---|---|---|
+| `CONFIG_QUEUE_SIZE` | 2 – 17 | `NoCConfiguration.py:802` |
+| `CONFIG_COH_NOC_WIDTH` | 32, 64, 128, 256, 512, 1024 | `NoCConfiguration.py:681` |
+| `CONFIG_DMA_NOC_WIDTH` | 32, 64, 128, 256, 512, 1024 | same |
+| `CONFIG_MEM_LINK_WIDTH` | 32, 64, 128, 256, 512 — **no 1024** | `esp_creator.py:306` |
+| `CONFIG_SLM_KBYTES` | 64, 128, 256, 512, 1024, 2048, 4096 | `esp_creator.py:224` |
+| `CONFIG_ACC_CACHES.acc_l2_sets` | 32 … 8192 (powers of two) | `esp_creator.py:393` |
+| `CONFIG_ACC_CACHES.acc_l2_ways` | 2, 4, 8 | `esp_creator.py:403` |
+| `CONFIG_CPU_CACHES.l2_sets` | 32 … 8192 | `esp_creator.py:393` |
+| `CONFIG_CPU_CACHES.l2_ways` | 2, 4, 8 | `esp_creator.py:403` |
+| `CONFIG_CPU_CACHES.llc_sets` | 32 … 8192 | `esp_creator.py:393` |
+| `CONFIG_CPU_CACHES.llc_ways` | 4, 8, 16 | `esp_creator.py:404` |
+
+The accelerator cache is admitted deliberately: §4.3 shows 99% of this
+accelerator's DMA traffic is weights re-read every invocation, so sizing that
+cache is one of the two ways to attack the dominant cost, and excluding it would
+have hidden the clearest SoC/RTL interaction in the project.
+
+Two prerequisites apply to the cache knobs specifically:
+
+- **`CONFIG_CACHE_EN` must be `y`.** The `xilinx-vc707-xc7vx485t` defconfig ships
+  `#CONFIG_CACHE_EN is not set`, which leaves `CONFIG_ACC_CACHES = 512 4` inert
+  and also makes the `ACC_COH_LLC` coherence mode of §11 meaningless. The
+  baseline configuration must enable it, and the baseline task verifies this.
+- **Do not regenerate the configuration through the GUI.** `soc.py:103-107`
+  defines a `changed()` callback that forces `acc_l2_sets`/`acc_l2_ways` to equal
+  the CPU L2 values whenever `cache_impl` is `ESP RTL`. That callback is
+  registered only by `esp_creator.py` (lines 711-715), and `make esp-config` runs
+  `esp_creator_batch.py`, which never builds the GUI and never calls it — so the
+  agent's flow can size the accelerator cache independently. Anyone who opens
+  `make esp-xconfig` will silently overwrite it.
 
 Validation is layered, because the existing validators are not sufficient on
 their own. `soc_opt_agent/config_edit/validators.py` checks allowlist membership,
@@ -368,16 +424,15 @@ failure mode of §4.1 rebuilt.
 
 `check` compares elementwise against the golden and additionally re-asserts (5).
 
-Rule 5 is not ceremony, though its justification is narrower than the report's
-framing suggests. "Reuse persistent local weight buffers across invocations" is
-one of the report's RTL optimization targets, but it does not apply here: LSTM's
-weights are `$readmemh`-loaded into on-chip SPRAMs and never move through DMA
-(§4.2). What rule 5 does protect is the wrapper's own per-run state — `buf_u`,
-`buf_v` and `buf_b` are filled from DMA on every invocation, and the FSM's reset
-path is directly in the edit surface, since removing bubble states is an
-explicit optimization target. A patch that drops a reset or lets a buffer carry
-over produces a correct invocation 0 and wrong invocations 1 and 2, which a
-single-invocation golden cannot see.
+Rule 5 is the most important of the five here. "Reuse persistent local weight
+buffers across invocations" is one of the report's RTL optimization targets, and
+§4.3 shows it is *the* opportunity for this accelerator: 99% of its DMA traffic
+is weights that are identical on every run. So the optimizer is actively
+encouraged toward patches that keep weights resident and skip the reload — and a
+patch that does that but gets the reset or the skip condition wrong produces a
+correct invocation 0 and wrong invocations 1 and 2. A single-invocation golden
+cannot see that, and cycles would look excellent. Rule 5 is the check that stands
+between this loop and its most attractive wrong answer.
 
 ## 11. Harness rebuild
 
@@ -457,7 +512,7 @@ without ModelSim, against recorded transcript fixtures.
 |---|---|
 | proposal schema | well-formed accepted; empty `rtl_patch.edits` rejected; unknown knob rejected; malformed JSON rejected |
 | rtl_edit | unique match applied; zero matches rejected; multiple matches rejected; write to `lstm.v` or `lstm_rest.v` rejected; port-signature change rejected |
-| soc_relax | derivation from baseline; union with the best's accumulated requirements; clamp at legal maximum recorded in `soc_derivation.json`; non-allowlisted knob rejected; composite knob (`CONFIG_ACC_CACHES`) rejected as a requirement; empty requirements leave the config byte-identical to baseline; a later best that drops a requirement releases that knob |
+| soc_relax | derivation from baseline; union with the best's accumulated requirements; clamp at legal maximum recorded in `soc_derivation.json`; non-allowlisted knob rejected; composite path (`CONFIG_ACC_CACHES.acc_l2_ways`) merged and rendered back into the two-field value; unknown field path rejected; empty requirements leave the config byte-identical to baseline; a later best that drops a requirement releases that knob |
 | extract | well-formed block parsed; missing block; truncated block; wrong length; multiple invocations |
 | degeneracy | all-zero rejected; constant rejected; wrong length rejected; invocations differing rejected; healthy vector accepted |
 | compare | identical passes; single-element difference fails and reports the index |
@@ -490,11 +545,22 @@ No claim that the loop works is made before (7).
 
 Item 1 changes the shape of the work: the repair touches the baseline the
 optimizer is measured against, so it must be finished, committed and measured
-before the first candidate is ever proposed. Whether the fix belongs in the
-software (read from index 0, allocate 21,704 bytes) or in the wrapper (write at
-`out_offset`, derive lengths from the configuration registers) is an
-implementation decision for the plan, but it must be made deliberately and
-recorded — changing the wrapper changes the thing being optimized.
+before the first candidate is ever proposed.
+
+**The repair is made entirely in software.** `lstm.c` is changed to match the
+hardware as it actually is — allocate at least 21,704 bytes for the DMA read,
+lay the buffer out as the wrapper's FSM consumes it, and read the results from
+index 0 — while `lstm_rtl_basic_dma64.v` stays byte-for-byte as restored. The
+alternative, wiring up `conf_info_*` and moving the write index in the wrapper,
+would be the more defensible hardware design but would make the baseline our own
+creation: every later cycle delta would be measured against RTL we wrote, and the
+boundary D1 draws around the wrapper would be one we had already crossed
+ourselves. Keeping the wrapper untouched means the baseline is genuinely "the
+current trusted RTL" and every improvement is attributable to the agent.
+
+The cost is that `lstm.c` now encodes the hardware's hardcoded geometry
+(2713 beats in, 64 outputs at index 0, the per-row u/v/b interleave). That is
+recorded in comments there rather than hidden.
 
 ## 16. Known risks and open questions
 
@@ -503,10 +569,17 @@ recorded — changing the wrapper changes the thing being optimized.
   is broken — but resolving it means the baseline we measure will not be the one
   the report measured. The report's 2,049,922 end-to-end cycles are not a target
   to reproduce, and the spec does not treat them as one.
-- **The repair could mask or create a bottleneck.** Fixing the DMA read length or
-  the write index changes exactly the traffic the optimizer is meant to improve.
-  The baseline must be re-measured after the repair, and the repair itself must
-  not be scored as an optimization.
+- **The input is a ramp, not a trained model.** `lstm.c` fills the buffer with
+  `in[j] = j`, and §4.3 shows most of that buffer is interpreted as weights. The
+  fixture is deterministic, which is all baseline characterization needs, but the
+  hidden state it produces may saturate or collapse. The degeneracy check of §10
+  is the thing most likely to fire first in this project, and if it does, the
+  answer is a better fixture — not a weaker check.
+- **Weight-reuse patches are the attractive wrong answer.** Because 99% of the
+  traffic is redundant weight loading, the largest cycle wins available to the
+  optimizer come from skipping it, and a subtly wrong skip still passes a
+  single-invocation comparison. Rule 5 of §10 is load-bearing, not defensive
+  decoration.
 - **Toolchain drift.** The cross compiler here is GCC 8.3.0 built from
   riscv-gnu-toolchain `afcc8bc`. The old server's version is unknown, which is one
   more reason no old measurement is reused.
