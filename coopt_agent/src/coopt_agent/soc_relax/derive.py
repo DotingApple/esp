@@ -26,6 +26,49 @@ class Derivation:
     config: dict[str, str]
     clamps: list[ClampRecord] = field(default_factory=list)
 
+    def to_dict(self) -> dict[str, object]:
+        """Plain types only, ready for `json.dumps`.
+
+        Spec section 9 requires the derivation to be written to
+        `soc_derivation.json` so the minimum sufficient configuration can be
+        recomputed later. The clamp records are the part that matters: they are
+        the record that a requirement was *not* fully met, and without them a
+        rerun cannot tell a config that satisfied every requirement from one
+        that hit the legal ceiling. Returns copies, so the caller cannot edit
+        the frozen derivation through the payload.
+        """
+        return {
+            "config": dict(self.config),
+            "clamps": [
+                {
+                    "knob": record.knob,
+                    "requested": record.requested,
+                    "applied": record.applied,
+                }
+                for record in self.clamps
+            ],
+        }
+
+
+def _as_int(key: str, raw: str, *, field_name: str | None = None) -> int:
+    """Parse a baseline value, reporting junk as a legality failure.
+
+    A knob can be in the legality table and still have a non-numeric baseline
+    (`CONFIG_QUEUE_SIZE = default`, an unexpanded template, a stray comment).
+    That is a statement about the configuration, not a Python error, so it is
+    raised as LegalityError like every other bad-config path here rather than
+    leaking a bare ValueError from int() to a caller that only catches
+    LegalityError.
+    """
+    where = key if field_name is None else f"{key}.{field_name}"
+    try:
+        return int(raw)
+    except ValueError as exc:
+        raise LegalityError(
+            f"{where} has a non-numeric baseline value {raw!r}; it cannot be "
+            "raised to meet a requirement"
+        ) from exc
+
 
 def _split_path(knob: str) -> tuple[str, str | None]:
     key, _, subfield = knob.partition(".")
@@ -70,7 +113,7 @@ def derive_config(
             )
 
         if subfield is None:
-            current = int(config[key])
+            current = _as_int(key, config[key])
             config[key] = str(max(current, applied))
             continue
 
@@ -87,7 +130,8 @@ def derive_config(
                 f"fields: {config[key]!r}"
             )
         index = fields.index(subfield)
-        parts[index] = str(max(int(parts[index]), applied))
+        current = _as_int(key, parts[index], field_name=subfield)
+        parts[index] = str(max(current, applied))
         config[key] = " ".join(parts)
 
     return Derivation(config=config, clamps=clamps)
