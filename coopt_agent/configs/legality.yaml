@@ -1,0 +1,37 @@
+# Legal values for the SoC knobs the optimizer may raise.
+# Mirrored from ESP's own configuration GUI; test_legality_mirrors_socgen.py
+# asserts this file still matches those sources, so upstream drift is caught.
+CONFIG_QUEUE_SIZE:
+  source: tools/socgen/NoCConfiguration.py:queue_size_choices
+  values: [2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17]
+CONFIG_COH_NOC_WIDTH:
+  source: tools/socgen/NoCConfiguration.py:noc_width_choices
+  values: [32, 64, 128, 256, 512, 1024]
+CONFIG_DMA_NOC_WIDTH:
+  source: tools/socgen/NoCConfiguration.py:noc_width_choices
+  values: [32, 64, 128, 256, 512, 1024]
+CONFIG_MEM_LINK_WIDTH:
+  # Note: stops at 512. The NoC widths go to 1024; this one does not.
+  source: tools/socgen/esp_creator.py:mem_link_width_choices
+  values: [32, 64, 128, 256, 512]
+CONFIG_SLM_KBYTES:
+  source: tools/socgen/esp_creator.py:slm_kbytes_choices
+  values: [64, 128, 256, 512, 1024, 2048, 4096]
+CONFIG_ACC_CACHES.acc_l2_sets:
+  source: tools/socgen/esp_creator.py:sets_choices
+  values: [32, 64, 128, 256, 512, 1024, 2048, 4096, 8192]
+CONFIG_ACC_CACHES.acc_l2_ways:
+  source: tools/socgen/esp_creator.py:l2_ways_choices
+  values: [2, 4, 8]
+CONFIG_CPU_CACHES.l2_sets:
+  source: tools/socgen/esp_creator.py:sets_choices
+  values: [32, 64, 128, 256, 512, 1024, 2048, 4096, 8192]
+CONFIG_CPU_CACHES.l2_ways:
+  source: tools/socgen/esp_creator.py:l2_ways_choices
+  values: [2, 4, 8]
+CONFIG_CPU_CACHES.llc_sets:
+  source: tools/socgen/esp_creator.py:sets_choices
+  values: [32, 64, 128, 256, 512, 1024, 2048, 4096, 8192]
+CONFIG_CPU_CACHES.llc_ways:
+  source: tools/socgen/esp_creator.py:llc_ways_choices
+  values: [4, 8, 16]

@@ -1,0 +1,14 @@
+# Which files the RTL optimizer may modify, per accelerator.
+# Spec section 8 guard 1: decision D1 -- "the compute core's arithmetic and the
+# ESP interface are off limits" -- is enforced structurally by this list, not by
+# asking the model to behave in a prompt.
+lstm_rtl:
+  top_module: lstm_rtl_basic_dma64
+  editable:
+    # The ESP wrapper: DMA control and the load/compute/store FSM.
+    - hw/src/lstm_rtl_basic_dma64/lstm_rtl_basic_dma64.v
+  read_only:
+    # `module lstm` -- the compute core top.
+    - hw/src/lstm_rtl_basic_dma64/lstm.v
+    # lstm_top, vecmat_mul_x, vecmat_add_h, signedmul, qadd2, spram_*.
+    - hw/src/lstm_rtl_basic_dma64/lstm_rest.v
