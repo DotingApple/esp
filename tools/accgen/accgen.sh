@@ -362,10 +362,12 @@ for d in $dirs; do
         rename accelerator $LOWER */*
 	rename acc_full $LOWERFULL */*
     elif cat /etc/os-release | grep -q -i rhel; then
-        rename accelerator $LOWER *
-	rename acc_full $LOWERFULL *
-        rename accelerator $LOWER */*
-	rename acc_full $LOWERFULL */*
+        # util-linux rename returns exit 4 when no files match the pattern;
+        # tolerate that so `set -e` does not abort the whole generator.
+        rename accelerator $LOWER * 2>/dev/null || true
+	rename acc_full $LOWERFULL * 2>/dev/null || true
+        rename accelerator $LOWER */* 2>/dev/null || true
+	rename acc_full $LOWERFULL */* 2>/dev/null || true
     fi
     
     if [[ "$FLOW" == "rtl" && "$d" != "hls" ]]; then
@@ -743,8 +745,8 @@ for d in $dirs; do
 	rename accelerator $LOWER *
 	rename acc_full $LOWERFULL *
     elif cat /etc/os-release | grep -q -i rhel; then
-	rename accelerator $LOWER *
-	rename acc_full $LOWERFULL *
+	rename accelerator $LOWER * 2>/dev/null || true
+	rename acc_full $LOWERFULL * 2>/dev/null || true
     fi
 
     sed -i "s/accelerator_name/$LOWER/g" *
