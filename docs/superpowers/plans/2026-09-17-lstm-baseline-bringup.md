@@ -53,7 +53,8 @@ by editing the wrapper.
 ### Task 1: Install lstm_rtl into tech/ and build a baseline SoC config
 
 **Files:**
-- Create: `socs/xilinx-vc707-xc7vx485t/socgen/esp/.esp_config` (generated, then committed)
+- Create: `coopt_agent/configs/baseline_lstm_rtl.esp_config` (tracked canonical copy)
+- Generated (gitignored, installed from the above): `socs/xilinx-vc707-xc7vx485t/socgen/esp/.esp_config`
 - Create: `docs/superpowers/evidence/task1-socmap-check.txt`
 - Generated (gitignored): `tech/virtex7/acc/lstm_rtl/`
 
@@ -109,7 +110,14 @@ cd /home/pd2827/esp/socs/xilinx-vc707-xc7vx485t/socgen/esp
 cp .esp_config .esp_config.orig
 
 # 1. Put the accelerator in the empty tile.
-sed -i 's|^TILE_1_0 = 2 empty empty$|TILE_1_0 = 2 acc LSTM_RTL|' .esp_config
+#    soc.py:456-478 writes an accelerator tile as
+#      TILE_<y>_<x> = <n> acc <NAME> <point> <has_l2> <has_tdvfs> <vendor>
+#    <point> is the implementation directory name with the "<acc>_" prefix
+#    stripped, so lstm_rtl_basic_dma64 -> basic_dma64 (SoC_Config.__init__).
+#    has_l2 = 0: see the controller's ruling recorded in the ledger -- at
+#    ACC_COH_LLC the accelerator's private L2 is bypassed, and full coherence
+#    is out of scope, so an accelerator L2 would be simulated but never used.
+sed -i 's|^TILE_1_0 = 2 empty empty$|TILE_1_0 = 2 acc LSTM_RTL basic_dma64 0 0 sld|' .esp_config
 
 # 2. Enable caches. ACC_COH_LLC needs the LLC, and CONFIG_ACC_CACHES is inert
 #    without this (spec section 9).
@@ -157,10 +165,16 @@ an empty result.
 
 - [ ] **Step 7: Commit**
 
+`socs/.gitignore:44` ignores `socgen`, so the live `.esp_config` cannot be
+committed where it sits. Keep the canonical copy in a tracked location instead —
+the spec's §9 derivation needs the baseline config as a durable artifact anyway.
+
 ```bash
 cd /home/pd2827/esp
-mkdir -p docs/superpowers/evidence
-git add socs/xilinx-vc707-xc7vx485t/socgen/esp/.esp_config docs/superpowers/evidence/task1-socmap-check.txt
+mkdir -p docs/superpowers/evidence coopt_agent/configs
+cp socs/xilinx-vc707-xc7vx485t/socgen/esp/.esp_config \
+   coopt_agent/configs/baseline_lstm_rtl.esp_config
+git add coopt_agent/configs/baseline_lstm_rtl.esp_config docs/superpowers/evidence/task1-socmap-check.txt
 git commit -m "lstm baseline: SoC config with lstm_rtl tile, caches and monitors on
 
 The vc707 defconfig is a 2x2 SoC with no accelerator tile, CONFIG_CACHE_EN
@@ -344,7 +358,7 @@ down to and including the `mem_size = ...` line with:
 Replace `init_buf` with:
 
 ```c
-static void init_buf (token_t *in, token_t * gold)
+static void init_buf (token_t *in)
 {
 	unsigned i;
 
@@ -354,10 +368,12 @@ static void init_buf (token_t *in, token_t * gold)
 	 * degenerate, the answer is a better fixture, not a weaker check. */
 	for (i = 0; i < in_len; i++)
 		in[i] = (token_t) (i & 0x7fff);
-
-	(void) gold;
 }
 ```
+
+The `gold` parameter is dropped here rather than kept and ignored, because Step 5
+deletes the `gold` local in `main` and Task 4 calls this function again. Update
+the existing call in `main` to `init_buf(mem);` in this step.
 
 - [ ] **Step 4: Print the output vector**
 
@@ -399,9 +415,10 @@ with:
 			 * printed was unconditional. Correctness is decided off-chip by
 			 * goldengen against this dumped vector. See spec section 4.1. */
 			dump_out(&mem[out_offset], 0);
-			(void) errors;
-			(void) gold;
 ```
+
+Leave the `errors` and `gold` locals alone for now; Step 5 removes them together
+with the function that used them.
 
 - [ ] **Step 5: Delete the code that is now unused**
 
@@ -436,9 +453,8 @@ static int validate_buf(token_t *out, token_t *gold)
 
 Deleting `validate_buf` rather than leaving it is the point of spec §4.1: a
 function that always returns success should not survive in the tree looking like
-a check. Also drop the now-unused `errors` and `gold` locals in `main` along with
-the `(void)` casts that Step 4 added for them, and the `aligned_free(gold)` /
-`gold = aligned_malloc(out_size)` pair.
+a check. Also drop the now-unused `errors` and `gold` locals in `main`, and the
+`gold = aligned_malloc(out_size);` / `aligned_free(gold);` pair.
 
 - [ ] **Step 6: Set the coherence mode**
 
@@ -556,8 +572,11 @@ Three invocations separate first-run effects from steady state, and make spec
 biggest available cycle win is skipping the redundant weight load and a wrong
 skip only shows up after the first run.
 
-Replace the single invocation body (from `printf("  Generate input...\n");`
-through the `dump_out(...)` added in Task 3) with:
+The invocation sits inside the `#ifndef __riscv` / `#else` block that Task 3
+Step 6 edited; under `__riscv` that is a bare `{ coherence = ACC_COH_LLC; ... }`.
+Replace everything inside that block **after** the `coherence = ACC_COH_LLC;`
+assignment — i.e. from `printf("  --------------------\n");` down to and
+including the `dump_out(...)` call Task 3 added — with:
 
 ```c
 		esp_monitor_args_t mon_args;
@@ -575,7 +594,7 @@ through the `dump_out(...)` added in Task 3) with:
 			/* Re-initialize every time: the accelerator writes its output over
 			 * the start of this same buffer, so invocation n+1 would otherwise
 			 * see invocation n's results as input. */
-			init_buf(mem, gold);
+			init_buf(mem);
 
 			iowrite32(dev, COHERENCE_REG, coherence);
 #ifndef __sparc
