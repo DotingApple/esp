@@ -183,7 +183,7 @@ accelerator tile there is nothing to measure, without caches ACC_COH_LLC is
 meaningless and CONFIG_ACC_CACHES is inert, and without monitors there is no
 evaluation signal at all.
 
-Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>"
+Co-Authored-By: <the attribution line your own session was given>"
 git push fork coopt
 ```
 
@@ -263,7 +263,7 @@ config and ModelSim work together. The PASS in this transcript is vacuous --
 validate_buf's comparison is commented out -- and is recorded only as proof
 that the flow completes.
 
-Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>"
+Co-Authored-By: <the attribution line your own session was given>"
 git push fork coopt
 ```
 
@@ -525,7 +525,7 @@ so the baseline stays the current trusted RTL.
 Also dumps the output vector for off-chip checking and drops the unconditional
 PASS, and switches to ACC_COH_LLC now that caches are enabled.
 
-Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>"
+Co-Authored-By: <the attribution line your own session was given>"
 git push fork coopt
 ```
 
@@ -701,7 +701,7 @@ report's description; the modified harness it described was lost with the old
 server. Follows soft/common/apps/baremetal/fft_monitors as the in-tree
 reference for the monitors API.
 
-Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>"
+Co-Authored-By: <the attribution line your own session was given>"
 git push fork coopt
 ```
 
@@ -783,10 +783,13 @@ repaired baseline, and spec §16 records that the two are not comparable.
 
 ```bash
 cd /home/pd2827/esp
-git diff a45f2bb8..HEAD -- accelerators/rtl/lstm_rtl/hw/src/lstm_rtl_basic_dma64/lstm_rtl_basic_dma64.v
+git diff 2c4234c5..HEAD -- accelerators/rtl/lstm_rtl/hw/src/lstm_rtl_basic_dma64/lstm_rtl_basic_dma64.v
 ```
 
-Expected: **empty output**. This is the plan's central constraint. A non-empty
+Expected: **empty output**. The base is `2c4234c5` ("Restore SLDB baseline
+accelerators from backup"), the commit that introduced this file — not the
+branch point `a45f2bb8`, where the file does not exist yet and the diff would
+show all 340 lines as an addition. This is the plan's central constraint. A non-empty
 diff means the baseline is no longer the restored RTL and the measurement's
 meaning has changed — report it rather than committing.
 
@@ -802,7 +805,7 @@ contract, instrumented harness, wrapper untouched. Not comparable to the
 report's 2,049,922 cycles, which were taken on a different server with an
 unknown toolchain against software that could not see the accelerator's output.
 
-Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>"
+Co-Authored-By: <the attribution line your own session was given>"
 git push fork coopt
 ```
 
@@ -858,7 +861,7 @@ Only the ESP wrapper is editable; lstm.v and lstm_rest.v hold the compute core
 and are read-only. Spec decision D1 is enforced by this list rather than by
 prompt wording. The hashes pin what the optimizer starts from.
 
-Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>"
+Co-Authored-By: <the attribution line your own session was given>"
 git push fork coopt
 ```
 
