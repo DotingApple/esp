@@ -221,6 +221,39 @@ file /home/pd2827/esp/socs/xilinx-vc707-xc7vx485t/soft-build/ariane/baremetal/ls
 
 Expected: an `ELF 64-bit LSB executable, UCB RISC-V`.
 
+- [ ] **Step 3a: Reconstruct the lost `vsim.tcl`**
+
+`utils/make/modelsim.mk:263-269` runs `vsim -c -do "do $(DESIGN_PATH)/vsim.tcl"`
+only when that file exists, and falls back to a bare interactive `vsim -c`
+otherwise. Only the three ASIC SoCs ship one; every FPGA SoC, this one included,
+takes the fallback — which waits for a human to type `run -all` and, launched
+detached, reads EOF and exits after elaboration without ever running.
+
+The old server had this file: a surviving transcript in the backup repository
+shows `-do "do /home/cz2931/esp/socs/xilinx-vc707-xc7vx485t/vsim.tcl"` on the
+vsim command line. The file itself was never backed up, so reconstruct it.
+
+Create `socs/xilinx-vc707-xc7vx485t/vsim.tcl`:
+
+```tcl
+# Drive an unattended batch simulation.
+#
+# utils/make/modelsim.mk sources this after `vsim` has already elaborated the
+# design, so the design is loaded and only the run is missing. ESP's testbench
+# ends the run itself: top.vhd asserts `Failure: Program Completed!`, which
+# stops the simulation and makes `run -all` return. That assertion is why a
+# successful run reports `Errors: 1` -- it is the completion signal, not a fault.
+#
+# `quit -f` is explicit rather than relying on vsim reaching EOF on stdin: that
+# implicit exit is exactly what made the unattended run look like a hang.
+run -all
+quit -f
+```
+
+Verify it is picked up — the vsim command line in the transcript must contain
+`-do "do .../vsim.tcl"`. If it does not, `DESIGN_PATH` is not what this step
+assumes (`socs/xilinx-vc707-xc7vx485t/Makefile:10` sets it to `$(PWD)`).
+
 - [ ] **Step 3: Run the simulation in the background**
 
 This takes a long time. Launch it detached and wait for completion rather than
@@ -237,6 +270,10 @@ cd /home/pd2827/esp/socs/xilinx-vc707-xc7vx485t
 cp modelsim/transcript /home/pd2827/esp/docs/superpowers/evidence/task2-stock-transcript.txt
 grep -nE "Scanning device tree|lstm not found|Start\.\.\.|Done|PASS|FAIL|ESP MONITOR" modelsim/transcript | head -30
 ```
+
+**Budget about an hour.** A surviving old-server transcript for this accelerator
+reports `Elapsed time: 0:53:14` for a single invocation, and the instrumented
+harness of Task 4 will make three. Do not mistake a long run for a hang.
 
 Expected, in order: the device-tree scan, `**************** sld,lstm_rtl.0 ****************`,
 `Start...`, `Done`, `... PASS`.
