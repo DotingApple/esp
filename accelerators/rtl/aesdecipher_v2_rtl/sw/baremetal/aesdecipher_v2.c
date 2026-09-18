@@ -10,6 +10,24 @@
 #include <esp_probe.h>
 #include <fixed_point.h>
 
+/* --- ESP_MON_INSTRUMENTED ---
+ * Monitor and cycle reporting, added by setup/instrument_baremetal.py.
+ * The counters are memory-mapped registers; enabling them in .esp_config
+ * instantiates the hardware, but only this code makes them observable.
+ */
+#include <monitors.h>
+
+static inline uint64_t esp_read_cycles(void)
+{
+#ifdef __riscv
+	uint64_t __c;
+	__asm__ volatile ("rdcycle %0" : "=r" (__c));
+	return __c;
+#else
+	return 0;
+#endif
+}
+
 typedef int64_t token_t;
 
 static unsigned DMA_WORD_PER_BEAT(unsigned _st)
@@ -211,6 +229,13 @@ int main(int argc, char * argv[])
 		iowrite32(dev, AESDECIPHER_V2_AES_NUM_BLOCKS_REG, aes_num_blocks);
 
 			// Flush (customize coherence model here)
+/* ESP_MON_INSTRUMENTED: capture before the accelerator starts */
+			esp_monitor_args_t __mon_args;
+			esp_monitor_vals_t __mon_start, __mon_end, __mon_diff;
+			uint64_t __cyc_start, __cyc_end;
+			__mon_args.read_mode = ESP_MON_READ_ALL;
+			esp_monitor(__mon_args, &__mon_start);
+			__cyc_start = esp_read_cycles();
 			esp_flush(coherence);
 
 			// Start accelerators
@@ -224,6 +249,13 @@ int main(int argc, char * argv[])
 				done &= STATUS_MASK_DONE;
 			}
 			iowrite32(dev, CMD_REG, 0x0);
+			/* ESP_MON_INSTRUMENTED: capture after the accelerator reports done */
+			__cyc_end = esp_read_cycles();
+			esp_monitor(__mon_args, &__mon_end);
+			__mon_diff = esp_monitor_diff(__mon_start, __mon_end);
+			printf("ESP_CPU_CYCLES %llu\n",
+			       (unsigned long long) (__cyc_end - __cyc_start));
+			esp_monitor_print(__mon_args, __mon_diff);
 
 			printf("  Done\n");
 			printf("  validating...\n");

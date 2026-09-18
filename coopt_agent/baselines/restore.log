@@ -1,0 +1,53 @@
+strings: '/home/pd2827/esp/accelerators/third-party/NV_NVDLA/NV_NVDLA.verilog': No such file
+strings: '/home/pd2827/esp/accelerators/third-party/NV_NVDLA/NV_NVDLA.verilog': No such file
+strings: '/home/pd2827/esp/accelerators/third-party/NV_NVDLA/NV_NVDLA.verilog': No such file
+    MKDIR lstm_rtl-wdir
+    INFO Installing available implementations for lstm_rtl to /home/pd2827/esp/tech/virtex7/acc/lstm_rtl
+    MAKE lstm_rtl-hls
+make[1]: Entering directory '/home/pd2827/esp/accelerators/rtl/lstm_rtl/hw/hls-work-virtex7'
+make[1]: Leaving directory '/home/pd2827/esp/accelerators/rtl/lstm_rtl/hw/hls-work-virtex7'
+strings: '/home/pd2827/esp/accelerators/third-party/NV_NVDLA/NV_NVDLA.verilog': No such file
+strings: '/home/pd2827/esp/accelerators/third-party/NV_NVDLA/NV_NVDLA.verilog': No such file
+strings: '/home/pd2827/esp/accelerators/third-party/NV_NVDLA/NV_NVDLA.verilog': No such file
+    DIFF checking .esp_config...
+    INFO Using custom configuration found in ".esp_config" for ESP
+
+Generating ESP configuration...
+TILE_0_0 = 0 mem mem
+TILE_0_1 = 1 cpu cpu
+TILE_1_0 = 2 acc LSTM_RTL basic_dma64 0 0 sld
+TILE_1_1 = 3 misc IO
+Created global constants definition into 'esp_global.vhd'
+Created global verilog constants into 'esp_global.svh'
+Created global constants definition into 'esp_global_sv.sv'
+Created configuration into 'socmap.vhd'
+Created ESPLink header into 'esplink.h'
+Created kernel module load script into 'S64esp'
+Created soc defines into 'soc_defs.h'
+Created soc locations into 'soc_locs.h'
+Created device-tree into 'riscv.dts'
+Created RTL caches configuration into 'cache_cfg.svh'
+Created configuration into 'mmi64_regs.h'
+strings: '/home/pd2827/esp/accelerators/third-party/NV_NVDLA/NV_NVDLA.verilog': No such file
+strings: '/home/pd2827/esp/accelerators/third-party/NV_NVDLA/NV_NVDLA.verilog': No such file
+strings: '/home/pd2827/esp/accelerators/third-party/NV_NVDLA/NV_NVDLA.verilog': No such file
+    CLEAN socketgen-distclean
+strings: '/home/pd2827/esp/accelerators/third-party/NV_NVDLA/NV_NVDLA.verilog': No such file
+strings: '/home/pd2827/esp/accelerators/third-party/NV_NVDLA/NV_NVDLA.verilog': No such file
+strings: '/home/pd2827/esp/accelerators/third-party/NV_NVDLA/NV_NVDLA.verilog': No such file
+    MKDIR socketgen
+    RUN socketgen
+    WARNING: No caches found in /home/pd2827/esp/tech/virtex7/sccs.
+             Please check the "Use RTL" option in the "Cache Configuration" tab when configuring ESP.
+    INFO: Retrieving information for NV_NVDLA
+          NV_NVDLA: NVIDIA, NVDLA small, ID 100
+    INFO: System DMA_WIDTH is 64; skipping lstm_rtl_basic_dma32
+    INFO: Found implementation basic_dma64 for lstm_rtl
+    INFO: Retrieving information for lstm_rtl
+          lstm_rtl_[basic_dma64]: Accelerator LSTM, 4MB, ID 031
+          {
+            num_timesteps, num_timesteps, 32bits, register 16, def. value 0
+            hidden_dim, hidden_dim, 32bits, register 17, def. value 0
+            in_dim, in_dim, 32bits, register 18, def. value 0
+          }
+    INFO: Generating RTL to ./socketgen

@@ -1,8 +1,0 @@
-{
-  "accelerator": "lstm_rtl",
-  "status": "pass",
-  "failed_stage": "",
-  "detail": "software reported PASS (may be vacuous)",
-  "sim_time_ns": 12723520,
-  "wall_seconds": 1315
-}

@@ -221,6 +221,36 @@ for acc in "${ACCS[@]}"; do
     fi
 
     IFS='|' read -r status detail < <(classify "$acc" "$OUT_DIR/$acc/transcript.txt")
+
+    # Pull the monitor counters out of the transcript into metrics.json. The
+    # counters only appear because setup/instrument_baremetal.py made the
+    # program read them: enabling CONFIG_MON_* instantiates the hardware, but
+    # nothing prints it otherwise.
+    python3 - "$OUT_DIR/$acc/transcript.txt" "$OUT_DIR/$acc/metrics.json" "$acc" <<'PYMON'
+import json, re, sys
+src, dst, acc = sys.argv[1:4]
+text = open(src, errors="replace").read()
+
+def one(pattern, cast=int):
+    m = re.search(pattern, text)
+    return cast(m.group(1)) if m else None
+
+metrics = {
+    "accelerator": acc,
+    "cpu_cycles": one(r"ESP_CPU_CYCLES\s+(\d+)"),
+    "sim_time_ns": one(r"Program Completed.*?\n.*?Time:\s*(\d+)"),
+    "acc_tlb_cycles": one(r"Accelerator \d+ TLB-loading cycles:\s*(\d+)"),
+    "acc_mem_cycles": one(r"Accelerator \d+ mem cycles:\s*(\d+)"),
+    "acc_total_cycles": one(r"Accelerator \d+ total cycles:\s*(\d+)"),
+    "acc_invocations": one(r"Accelerator \d+ invocations:\s*(\d+)"),
+    "l2_hits": one(r"L2.*?hits:\s*(\d+)"),
+    "l2_misses": one(r"L2.*?misses:\s*(\d+)"),
+    "llc_hits": one(r"LLC.*?hits:\s*(\d+)"),
+    "llc_misses": one(r"LLC.*?misses:\s*(\d+)"),
+    "ddr_accesses": one(r"[Oo]ff-chip memory accesses:\s*(\d+)"),
+}
+json.dump(metrics, open(dst, "w"), indent=2)
+PYMON
     # "Time: <ns>" sits on the line AFTER "Program Completed", not on it.
     sim_ns=$(grep -A1 "Program Completed" "$OUT_DIR/$acc/transcript.txt" |
              grep -oP 'Time:\s*\K[0-9]+' | head -1)
