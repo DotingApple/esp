@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
-"""Render the baseline sweep's per-accelerator JSON results as one table.
+"""Render the baseline sweep's per-accelerator results as one table.
 
-Regenerated after every accelerator, so the sweep's progress is readable while
-it is still running.
+Reads coopt_agent/baselines/<accelerator>/sweep.json and writes the table to
+that directory's SUMMARY.md. Regenerated after every accelerator, so the
+sweep's progress is readable while it is still running.
 """
 
 from __future__ import annotations
@@ -37,7 +38,7 @@ USABLE = {"pass", "fail", "completed_no_verdict"}
 def main() -> int:
     out_dir = Path(sys.argv[1] if len(sys.argv) > 1 else ".")
     results = []
-    for path in sorted(out_dir.glob("*.json")):
+    for path in sorted(out_dir.glob("*/sweep.json")):
         try:
             results.append(json.loads(path.read_text()))
         except (OSError, json.JSONDecodeError):

@@ -13,17 +13,21 @@
 # Usage:  setup/baseline_sweep.sh [accelerator ...]
 #         setup/baseline_sweep.sh            # all of them
 #
-# Output: docs/superpowers/evidence/baseline-sweep/
-#           <acc>.json          structured result
-#           <acc>.transcript    ModelSim transcript, when one was produced
-#           <acc>.log           build/sim output (tail on failure)
-#           SUMMARY.md          regenerated after every accelerator
+# Output: coopt_agent/baselines/<acc>/
+#           sweep.json          structured result
+#           transcript.txt      ModelSim transcript, when one was produced
+#           build.log           build/sim output (tail on failure)
+#         coopt_agent/baselines/SUMMARY.md   regenerated after every accelerator
+#
+# It writes alongside each accelerator's soc_params.esp_config and pristine
+# rtl/, so one directory holds everything that accelerator's baseline consists
+# of: what it was configured with, what it was built from, and what happened.
 
 set -u
 
 ESP_ROOT=/home/pd2827/esp
 SOC_DIR="$ESP_ROOT/socs/xilinx-vc707-xc7vx485t"
-OUT_DIR="$ESP_ROOT/docs/superpowers/evidence/baseline-sweep"
+OUT_DIR="$ESP_ROOT/coopt_agent/baselines"
 BASELINE_CFG="$ESP_ROOT/coopt_agent/configs/baseline_lstm_rtl.esp_config"
 LIVE_CFG="$SOC_DIR/socgen/esp/.esp_config"
 CAD_ENV=/opt/cad/scripts/tools_env.sh
@@ -98,7 +102,7 @@ esp_run() {
 # by a human deciding which accelerators are worth optimizing.
 emit() {
     local acc=$1 status=$2 stage=$3 detail=$4 sim_ns=$5 wall=$6
-    python3 - "$OUT_DIR/$acc.json" "$acc" "$status" "$stage" "$detail" "$sim_ns" "$wall" <<'PY'
+    python3 - "$OUT_DIR/$acc/sweep.json" "$acc" "$status" "$stage" "$detail" "$sim_ns" "$wall" <<'PY'
 import json, sys
 path, acc, status, stage, detail, sim_ns, wall = sys.argv[1:8]
 json.dump({
@@ -130,13 +134,14 @@ classify() {
 
 ############################  per-accelerator sweep  ###########################
 for acc in "${ACCS[@]}"; do
-    if [ -f "$OUT_DIR/$acc.json" ]; then
+    if [ -f "$OUT_DIR/$acc/sweep.json" ]; then
         say "$acc: result exists, skipping"; continue
     fi
 
     say "=== $acc ==="
     started=$(date +%s)
-    log="$OUT_DIR/$acc.log"; : >"$log"
+    mkdir -p "$OUT_DIR/$acc"
+    log="$OUT_DIR/$acc/build.log"; : >"$log"
     upper=$(echo "$acc" | tr '[:lower:]' '[:upper:]')
 
     # Install ONLY the accelerator under test. `make sim` builds a ModelSim
@@ -160,8 +165,15 @@ for acc in "${ACCS[@]}"; do
     #   <n> acc <NAME> <point> <has_l2> <has_tdvfs> <vendor>
     # has_l2=0 because every run here uses the default coherence path; an
     # accelerator L2 would be simulated and never used.
-    cp "$BASELINE_CFG" "$LIVE_CFG"
-    sed -i "s|^TILE_1_0 = .*|TILE_1_0 = 2 acc $upper basic_dma64 0 0 sld|" "$LIVE_CFG"
+    # Each accelerator has its own committed baseline config, already carrying
+    # the right tile line. Fall back to retargeting the shared one if an
+    # accelerator has no baseline directory yet.
+    if [ -f "$OUT_DIR/$acc/soc_params.esp_config" ]; then
+        cp "$OUT_DIR/$acc/soc_params.esp_config" "$LIVE_CFG"
+    else
+        cp "$BASELINE_CFG" "$LIVE_CFG"
+        sed -i "s|^TILE_1_0 = .*|TILE_1_0 = 2 acc $upper basic_dma64 0 0 sld|" "$LIVE_CFG"
+    fi
     grep -q "^TILE_1_0 = 2 acc $upper " "$LIVE_CFG" || {
         emit "$acc" config_failed retarget "tile line did not take" "" $(( $(date +%s) - started )); continue; }
 
@@ -195,7 +207,7 @@ for acc in "${ACCS[@]}"; do
     wall=$(( $(date +%s) - started ))
 
     t="$SOC_DIR/modelsim/transcript"
-    [ -f "$t" ] && cp "$t" "$OUT_DIR/$acc.transcript"
+    [ -f "$t" ] && cp "$t" "$OUT_DIR/$acc/transcript.txt"
 
     if [ $simrc -eq 124 ] || [ $simrc -eq 137 ]; then
         # A timeout is a real result, and the transcript says where it stalled.
@@ -204,13 +216,13 @@ for acc in "${ACCS[@]}"; do
         emit "$acc" timeout sim "$det" "" "$wall"; continue
     fi
 
-    if [ ! -s "$OUT_DIR/$acc.transcript" ]; then
+    if [ ! -s "$OUT_DIR/$acc/transcript.txt" ]; then
         emit "$acc" sim_compile_failed sim "no transcript produced" "" "$wall"; continue
     fi
 
-    IFS='|' read -r status detail < <(classify "$acc" "$OUT_DIR/$acc.transcript")
+    IFS='|' read -r status detail < <(classify "$acc" "$OUT_DIR/$acc/transcript.txt")
     # "Time: <ns>" sits on the line AFTER "Program Completed", not on it.
-    sim_ns=$(grep -A1 "Program Completed" "$OUT_DIR/$acc.transcript" |
+    sim_ns=$(grep -A1 "Program Completed" "$OUT_DIR/$acc/transcript.txt" |
              grep -oP 'Time:\s*\K[0-9]+' | head -1)
     emit "$acc" "$status" "" "$detail" "${sim_ns:-}" "$wall"
 

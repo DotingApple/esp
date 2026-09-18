@@ -2,6 +2,14 @@
 *.egg-info/
 __pycache__/
 .pytest_cache/
+
+# baselines/ is deliberately NOT ignored -- see baselines/README.md. This
+# project was rebuilt from a transcript that had been committed under the old
+# soc_opt_agent/baselines/, and evidence that lives on one machine only is
+# evidence one disk failure from gone.
+#
+# runs/ and bests/ stay ignored until the orchestrator exists and it is clear
+# which per-iteration artifacts are worth keeping. Proposals, metrics and
+# summaries are small and belong in git; dozens of 18 KB transcripts may not.
 runs/
-baselines/
 bests/
