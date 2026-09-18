@@ -588,6 +588,16 @@ recorded in comments there rather than hidden.
 - **Clamped requirements.** When a requested knob value is clamped, the RTL change
   runs under a SoC that does not fully satisfy it. The clamp is recorded, but the
   loop still scores the result; the reflection prompt must be able to see this.
+- **The monitor counters are approximate, and the accept threshold does not
+  know it.** ESP's monitors API guide states that reading a monitor takes time
+  during which it keeps counting, and that monitors in different tiles are not
+  sampled at the same instant; the error is small but not zero. Spec §12 accepts
+  a candidate on a 2% improvement in end-to-end cycles. That metric is a CPU
+  cycle count rather than a monitor read, so it is not directly affected — but
+  every memory-system number the reflection prompt reasons about is, and a
+  monitor delta smaller than the sampling noise is not evidence of anything.
+  The guide's own mitigation is longer sampling periods, which the
+  three-invocation harness already provides.
 - **The legality table is mirrored, not complete.** §9's table is copied from
   ESP's own GUI choice lists and tested against them, so per-knob ranges are
   authoritative. Cross-field constraints are not covered, and a legal combination

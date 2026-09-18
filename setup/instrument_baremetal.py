@@ -23,6 +23,25 @@ which every accelerator's Makefile includes -- already puts monitors.h on the
 include path and links libmonitors, because ESP's own fft_monitors example is
 built by exactly the same rules.
 
+Matches the API as documented at
+https://www.esp.cs.columbia.edu/docs/monitors_api/monitors_api-guide/ :
+esp_monitor is called twice with the same args, ESP_MON_READ_ALL needs no
+further fields, esp_monitor_diff handles counter overflow, and
+esp_monitor_print goes to the console under bare metal. esp_monitor_vals_alloc
+and esp_monitor_free are deliberately absent -- they exist only under Linux.
+
+Two caveats from that guide, worth knowing before trusting a small delta:
+
+  * The counters are approximate. Reading a monitor takes time during which it
+    keeps incrementing, and monitors in different tiles are not sampled at the
+    same instant. The guide says the error is small and shrinks with longer
+    sampling periods -- but it is not zero, so an improvement smaller than the
+    noise is not an improvement.
+  * esp_monitor_diff is only correct if a counter increments fewer than 2^32
+    times between the two calls (2^64 for the two 64-bit ones). One invocation
+    of ~12.7M ns of simulated time is far below that; a long multi-invocation
+    measurement would need checking.
+
 Idempotent: a file that already carries the marker is left alone.
 
 Usage:  setup/instrument_baremetal.py <accelerator> [...]
