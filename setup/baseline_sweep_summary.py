@@ -1,12 +1,10 @@
 #!/usr/bin/env python3
 """Render the baseline sweep's per-accelerator results as one table.
-
 Reads coopt_agent/baselines/<accelerator>/sweep.json and writes the table to
 that directory's SUMMARY.md. Regenerated after every accelerator, so the
 sweep's progress is readable while it is still running.
 """
 
-from __future__ import annotations
 
 import json
 import sys
