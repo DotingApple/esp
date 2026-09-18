@@ -1,0 +1,18 @@
+{
+  // ESP gitignores every artifact it generates: modelsim/ (including the
+  // ModelSim transcript), socgen/, soft-build/, .esp_config, *.exe. Hiding
+  // ignored files therefore hides every simulation result this project
+  // produces -- the transcript is the primary evidence of a run, and it is
+  // invisible in the explorer by default.
+  "explorer.excludeGitIgnore": false,
+
+  // Two build caches are large enough to make the file watcher a problem:
+  // .cache/modelsim holds ~7.7 GB of compiled Xilinx simulation libraries and
+  // _riscv_build ~5 GB of cross-toolchain sources. Neither changes during
+  // normal work, and neither is worth watching. modelsim/ is deliberately NOT
+  // excluded here -- watching it is how the transcript updates live.
+  "files.watcherExclude": {
+    "**/.cache/modelsim/**": true,
+    "**/_riscv_build/**": true
+  }
+}
