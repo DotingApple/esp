@@ -9,24 +9,55 @@
 #include <esp_accelerator.h>
 #include <esp_probe.h>
 #include <fixed_point.h>
-
+/* ESP_MON_INSTRUMENTED BEGIN */
 /* --- ESP_MON_INSTRUMENTED ---
  * Monitor and cycle reporting, added by setup/instrument_baremetal.py.
  * The counters are memory-mapped registers; enabling them in .esp_config
  * instantiates the hardware, but only this code makes them observable.
  */
 #include <monitors.h>
+/* Tile coordinates, generated per SoC. libmonitors.c includes this inside
+ * esp_monitor() so the arrays are locals there; including it here gives this
+ * file its own copies at file scope, which is what the tile-index computations
+ * below need. */
+#include "soc_locs.h"
 
+/* Read one monitor. READ_SINGLE returns the value directly and ignores the
+ * vals pointer, so NULL is what the guide's Example 1 passes. */
+#define __MON_RD(tile, idx, dst)          \
+	do {                                     \
+		__mon_args.tile_index = (tile);        \
+		__mon_args.mon_index  = (idx);         \
+		(dst) = esp_monitor(__mon_args, NULL); \
+	} while (0)
+
+/* sub_monitor_vals accounts for counter overflow between the two reads. */
+#define __MON_PR(name, s, e) \
+	printf("ESP_MON %s %u\n", (name), (unsigned) sub_monitor_vals((s), (e)))
+
+/* Reads mcycle, the machine-mode cycle counter, NOT rdcycle.
+ *
+ * rdcycle is the pseudo-instruction for the user-mode `cycle` CSR (0xC00), and
+ * this Ariane configuration traps on it: an instrumented run died on that one
+ * instruction while printing nothing further, which the testbench reported as
+ * "Program Completed!" because top.vhd asserts on cpuerr. It cost three
+ * full simulations to find, because the fault looked like an esp_monitor
+ * problem -- esp_monitor sits next to it and is entirely innocent.
+ *
+ * mcycle (0xB00) is implemented and readable here; the program runs in machine
+ * mode, which the CPU trace confirms.
+ */
 static inline uint64_t esp_read_cycles(void)
 {
 #ifdef __riscv
 	uint64_t __c;
-	__asm__ volatile ("rdcycle %0" : "=r" (__c));
+	__asm__ volatile ("csrr %0, mcycle" : "=r" (__c));
 	return __c;
 #else
 	return 0;
 #endif
 }
+/* ESP_MON_INSTRUMENTED END */
 
 typedef int64_t token_t;
 
@@ -254,13 +285,29 @@ int main(int argc, char * argv[])
 		iowrite32(dev, AESCIPHER_AES_NUM_BLOCKS_REG, aes_num_blocks);
 
 			// Flush (customize coherence model here)
-/* ESP_MON_INSTRUMENTED: capture before the accelerator starts */
+/* ESP_MON_INSTRUMENTED BEGIN */
+			/* ESP_MON_INSTRUMENTED: capture before the accelerator starts */
 			esp_monitor_args_t __mon_args;
-			esp_monitor_vals_t __mon_start, __mon_end, __mon_diff;
+			unsigned int __acc_tot_s, __acc_tot_e, __acc_mem_s, __acc_mem_e;
+			unsigned int __acc_tlb_s, __acc_tlb_e, __acc_inv_s, __acc_inv_e;
+			unsigned int __ddr_s, __ddr_e, __llc_h_s, __llc_h_e, __llc_m_s, __llc_m_e;
+			unsigned int __l2_h_s, __l2_h_e, __l2_m_s, __l2_m_e;
+			const int __acc_tile = acc_locs[0].row * SOC_COLS + acc_locs[0].col;
+			const int __mem_tile = mem_locs[0].row * SOC_COLS + mem_locs[0].col;
+			const int __cpu_tile = cpu_locs[0].row * SOC_COLS + cpu_locs[0].col;
 			uint64_t __cyc_start, __cyc_end;
-			__mon_args.read_mode = ESP_MON_READ_ALL;
-			esp_monitor(__mon_args, &__mon_start);
+			__mon_args.read_mode = ESP_MON_READ_SINGLE;
+			__MON_RD(__acc_tile, MON_ACC_TOT_LO_INDEX, __acc_tot_s);
+			__MON_RD(__acc_tile, MON_ACC_MEM_LO_INDEX, __acc_mem_s);
+			__MON_RD(__acc_tile, MON_ACC_TLB_INDEX, __acc_tlb_s);
+			__MON_RD(__acc_tile, MON_ACC_INVOCATIONS, __acc_inv_s);
+			__MON_RD(__mem_tile, MON_DDR_WORD_TRANSFER_INDEX, __ddr_s);
+			__MON_RD(__mem_tile, MON_LLC_HIT_INDEX, __llc_h_s);
+			__MON_RD(__mem_tile, MON_LLC_MISS_INDEX, __llc_m_s);
+			__MON_RD(__cpu_tile, MON_L2_HIT_INDEX, __l2_h_s);
+			__MON_RD(__cpu_tile, MON_L2_MISS_INDEX, __l2_m_s);
 			__cyc_start = esp_read_cycles();
+			/* ESP_MON_INSTRUMENTED END */
 			esp_flush(coherence);
 
 			// Start accelerators
@@ -274,13 +321,31 @@ int main(int argc, char * argv[])
 				done &= STATUS_MASK_DONE;
 			}
 			iowrite32(dev, CMD_REG, 0x0);
+			/* ESP_MON_INSTRUMENTED BEGIN */
 			/* ESP_MON_INSTRUMENTED: capture after the accelerator reports done */
 			__cyc_end = esp_read_cycles();
-			esp_monitor(__mon_args, &__mon_end);
-			__mon_diff = esp_monitor_diff(__mon_start, __mon_end);
-			printf("ESP_CPU_CYCLES %llu\n",
-			       (unsigned long long) (__cyc_end - __cyc_start));
-			esp_monitor_print(__mon_args, __mon_diff);
+			__MON_RD(__acc_tile, MON_ACC_TOT_LO_INDEX, __acc_tot_e);
+			__MON_RD(__acc_tile, MON_ACC_MEM_LO_INDEX, __acc_mem_e);
+			__MON_RD(__acc_tile, MON_ACC_TLB_INDEX, __acc_tlb_e);
+			__MON_RD(__acc_tile, MON_ACC_INVOCATIONS, __acc_inv_e);
+			__MON_RD(__mem_tile, MON_DDR_WORD_TRANSFER_INDEX, __ddr_e);
+			__MON_RD(__mem_tile, MON_LLC_HIT_INDEX, __llc_h_e);
+			__MON_RD(__mem_tile, MON_LLC_MISS_INDEX, __llc_m_e);
+			__MON_RD(__cpu_tile, MON_L2_HIT_INDEX, __l2_h_e);
+			__MON_RD(__cpu_tile, MON_L2_MISS_INDEX, __l2_m_e);
+			printf("ESP_MON_BEGIN\n");
+			printf("ESP_CPU_CYCLES %llu\n", (unsigned long long)(__cyc_end - __cyc_start));
+			__MON_PR("acc_total_cycles", __acc_tot_s, __acc_tot_e);
+			__MON_PR("acc_mem_cycles",   __acc_mem_s, __acc_mem_e);
+			__MON_PR("acc_tlb_cycles",   __acc_tlb_s, __acc_tlb_e);
+			__MON_PR("acc_invocations",  __acc_inv_s, __acc_inv_e);
+			__MON_PR("ddr_accesses",     __ddr_s,     __ddr_e);
+			__MON_PR("llc_hits",         __llc_h_s,   __llc_h_e);
+			__MON_PR("llc_misses",       __llc_m_s,   __llc_m_e);
+			__MON_PR("l2_hits",          __l2_h_s,    __l2_h_e);
+			__MON_PR("l2_misses",        __l2_m_s,    __l2_m_e);
+			printf("ESP_MON_END\n");
+			/* ESP_MON_INSTRUMENTED END */
 
 			printf("  Done\n");
 			printf("  validating...\n");
