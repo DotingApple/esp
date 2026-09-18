@@ -165,13 +165,43 @@ def instrument(accelerator):
 
 
 def revert(accelerator):
+    """Strip the instrumentation back out.
+
+    Not `git checkout`: the instrumented version is itself committed, so
+    restoring from git is a no-op that silently reports success. Removing the
+    inserted text is the only thing that actually reverts.
+    """
     path = source_for(accelerator)
-    if MARKER not in path.read_text():
+    text = path.read_text()
+    if MARKER not in text:
         return "%s: not instrumented" % accelerator
-    subprocess.run(
-        ["git", "-C", str(ESP_ROOT), "checkout", "--", str(path)], check=True
-    )
-    return "%s: reverted to the committed version" % accelerator
+
+    text = text.replace(HEADER, "")
+
+    # The inserted blocks are bounded by their marker comments; drop every line
+    # from a marker comment up to (and including) the last line of that block.
+    lines = text.splitlines(keepends=True)
+    kept, skipping = [], False
+    for line in lines:
+        if MARKER in line and line.lstrip().startswith("/*"):
+            skipping = True
+            continue
+        if skipping:
+            # Each inserted block has exactly one terminator. They must be
+            # matched precisely: "esp_read_cycles();" alone also matches the
+            # AFTER block's FIRST line, which would stop the skip early and
+            # leave the rest of the block behind.
+            if ("__cyc_start = esp_read_cycles();" in line
+                    or "esp_monitor_print(" in line):
+                skipping = False
+            continue
+        kept.append(line)
+
+    path.write_text("".join(kept))
+    remaining = path.read_text()
+    if MARKER in remaining or "esp_monitor" in remaining:
+        return "%s: INCOMPLETE revert -- traces remain, check by hand" % accelerator
+    return "%s: instrumentation removed" % accelerator
 
 
 def main():

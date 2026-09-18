@@ -126,6 +126,10 @@ classify() {
     if ! grep -q "Scanning device tree" "$t"; then echo "no_boot|program never reached device scan"; return; fi
     if ! grep -q "sld,$acc" "$t"; then echo "no_start|probe did not register sld,$acc"; return; fi
     if ! grep -q "Start\.\.\." "$t"; then echo "no_invoke|accelerator found but never started"; return; fi
+    # "Program Completed!" is top.vhd:200 asserting on cpuerr -- the CPU's error
+    # signal. A baremetal program that finishes normally halts and raises it, but
+    # so does an unhandled trap, so this line alone cannot tell success from a
+    # crash. It is necessary, not sufficient: the PASS/FAIL checks below decide.
     if ! grep -q "Program Completed" "$t"; then echo "no_done|started but never completed"; return; fi
     if grep -q "\.\.\. FAIL" "$t"; then echo "fail|software validation reported FAIL"; return; fi
     if grep -q "\.\.\. PASS" "$t"; then echo "pass|software reported PASS (may be vacuous)"; return; fi
