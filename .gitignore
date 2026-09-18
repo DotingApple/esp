@@ -12,3 +12,4 @@ _riscv32imc_build
 riscv_build.log
 riscv_make.log
 .claude/
+baseline_sweep.out
